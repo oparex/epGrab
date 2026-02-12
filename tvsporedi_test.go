@@ -64,7 +64,7 @@ func TestCompareTimeStrings(t *testing.T) {
 }
 
 func TestCompareTimeStringsInvalidFormat(t *testing.T) {
-	// Test that invalid formats fall back to string comparison gracefully
+	// Test that invalid formats return 0 (equal) to avoid incorrect midnight detection
 	tests := []struct {
 		time1 string
 		time2 string
@@ -78,8 +78,11 @@ func TestCompareTimeStringsInvalidFormat(t *testing.T) {
 	
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Should not panic, just return some result
-			_ = compareTimeStrings(tt.time1, tt.time2)
+			// Should return 0 for invalid formats to avoid incorrect midnight detection
+			result := compareTimeStrings(tt.time1, tt.time2)
+			if result != 0 {
+				t.Errorf("compareTimeStrings(%q, %q) = %d, expected 0 for invalid format", tt.time1, tt.time2, result)
+			}
 		})
 	}
 }

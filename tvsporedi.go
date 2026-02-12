@@ -49,12 +49,9 @@ func compareTimeStrings(time1, time2 string) int {
 	parts2 := strings.Split(time2, ":")
 	
 	if len(parts1) != 2 || len(parts2) != 2 {
-		// Fallback to string comparison if format is unexpected
-		if time1 > time2 {
-			return 1
-		} else if time1 < time2 {
-			return -1
-		}
+		// For unexpected formats, treat as equal to avoid incorrect midnight detection
+		// This is safer than lexicographic comparison which has the midnight bug
+		log.Printf("Warning: Unexpected time format for comparison: %q vs %q", time1, time2)
 		return 0
 	}
 	
@@ -64,12 +61,8 @@ func compareTimeStrings(time1, time2 string) int {
 	minute2, err4 := strconv.Atoi(parts2[1])
 	
 	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
-		// Fallback to string comparison if parsing fails
-		if time1 > time2 {
-			return 1
-		} else if time1 < time2 {
-			return -1
-		}
+		// For parsing errors, treat as equal to avoid incorrect midnight detection
+		log.Printf("Warning: Failed to parse time components: %q vs %q", time1, time2)
 		return 0
 	}
 	
