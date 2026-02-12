@@ -1,0 +1,13 @@
+# Binaries
+epGrab
+epGrab-*
+
+# XML output files
+*.xml
+
+# IDE files
+.idea/
+.vscode/
+
+# OS files
+.DS_Store

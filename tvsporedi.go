@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,10 +33,51 @@ func timeOffset(currentNode *html.Node) int {
 	if lastNode == nil {
 		return 0
 	}
-	if lastNode.FirstChild.FirstChild.Data > currentNode.FirstChild.FirstChild.Data {
+	// Compare times properly, not lexicographically
+	lastTime := lastNode.FirstChild.FirstChild.Data
+	currentTime := currentNode.FirstChild.FirstChild.Data
+	if compareTimeStrings(lastTime, currentTime) > 0 {
 		return 1
 	}
 	return timeOffset(lastNode)
+}
+
+// compareTimeStrings compares two time strings in "HH:MM" or "H:MM" format
+// Returns: >0 if time1 > time2, 0 if equal, <0 if time1 < time2
+func compareTimeStrings(time1, time2 string) int {
+	parts1 := strings.Split(time1, ":")
+	parts2 := strings.Split(time2, ":")
+	
+	if len(parts1) != 2 || len(parts2) != 2 {
+		// Fallback to string comparison if format is unexpected
+		if time1 > time2 {
+			return 1
+		} else if time1 < time2 {
+			return -1
+		}
+		return 0
+	}
+	
+	hour1, err1 := strconv.Atoi(parts1[0])
+	minute1, err2 := strconv.Atoi(parts1[1])
+	hour2, err3 := strconv.Atoi(parts2[0])
+	minute2, err4 := strconv.Atoi(parts2[1])
+	
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+		// Fallback to string comparison if parsing fails
+		if time1 > time2 {
+			return 1
+		} else if time1 < time2 {
+			return -1
+		}
+		return 0
+	}
+	
+	// Compare hours first, then minutes
+	if hour1 != hour2 {
+		return hour1 - hour2
+	}
+	return minute1 - minute2
 }
 
 func runTvSporedi(outPath string) {
