@@ -3,13 +3,13 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/gocolly/colly"
+	"github.com/PuerkitoBio/goquery"
 	"golang.org/x/net/html"
 )
 
@@ -39,95 +39,112 @@ func timeOffset(currentNode *html.Node) int {
 }
 
 func runTvSporedi(outPath string) {
-	// Instantiate default collector
-	c := colly.NewCollector(
-		colly.AllowedDomains("tvsporedi.si", "www.tvsporedi.si"),
-	)
-	detailCollector := c.Clone()
-
 	tv := &Tv{
 		GeneratorInfoName: "peter",
 		GeneratorInfoUrl:  "peter",
 	}
 
-	c.OnHTML("div[id=left-navigation] a[href]", func(e *colly.HTMLElement) {
-		params, err := url.ParseQuery(e.Attr("href"))
+	// Fetch main page
+	mainHTML, err := fetchRenderedHTML("https://www.tvsporedi.si/spored.php")
+	if err != nil {
+		log.Fatalf("Failed to fetch tvsporedi main page: %s", err)
+	}
+
+	mainDoc, err := goquery.NewDocumentFromReader(strings.NewReader(mainHTML))
+	if err != nil {
+		log.Fatalf("Failed to parse tvsporedi main page: %s", err)
+	}
+
+	// Extract channel links
+	type channelInfo struct {
+		id  string
+		url string
+	}
+	var channels []channelInfo
+
+	mainDoc.Find("div[id=left-navigation] a[href]").Each(func(_ int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if !exists {
+			return
+		}
+		params, err := url.ParseQuery(href)
 		if err != nil {
-			log.Fatalf("Problem decoding url %s: %s", e.Attr("href"), err)
+			log.Fatalf("Problem decoding url %s: %s", href, err)
 		}
 		if len(params["id"]) == 0 {
-			log.Fatalf("Empty id param in url %s", e.Attr("href"))
+			log.Fatalf("Empty id param in url %s", href)
 		}
-		fmt.Println(params["id"][0])
-		//if params["id"][0] != "HBO" {
-		//	return
-		//}
+		chanID := params["id"][0]
+		fmt.Println(chanID)
+
 		tv.Channel = append(tv.Channel, &Channel{
-			Id: params["id"][0],
+			Id: chanID,
 			DisplayName: &DisplayName{
 				Lang:  "sl",
-				Value: params["id"][0],
+				Value: chanID,
 			},
 		})
-		channelURL := e.Request.AbsoluteURL(strings.ReplaceAll(e.Attr("href"), " ", "+"))
-		err = detailCollector.Visit(channelURL)
-		if err != nil {
-			fmt.Println(err)
-		}
+
+		channelURL := "https://www.tvsporedi.si/" + strings.ReplaceAll(href, " ", "+")
+		channels = append(channels, channelInfo{id: chanID, url: channelURL})
 	})
 
-	detailCollector.OnHTML("div[class=schedule] > div[class!=clear]", func(e *colly.HTMLElement) {
-		params, err := url.ParseQuery(e.Request.URL.RawQuery)
+	// Fetch each channel's schedule
+	for _, ch := range channels {
+		chHTML, err := fetchRenderedHTML(ch.url)
 		if err != nil {
-			log.Fatalf("Problem decoding url %s: %s", e.Attr("href"), err)
-		}
-		if len(params["id"]) == 0 {
-			log.Fatalf("Empty id param in url %s", e.Attr("href"))
-		}
-		hour := e.ChildText(".time")
-		prog := e.ChildText(".prog")
-		rawData := getDesc(e.DOM.Nodes[0].LastChild)
-
-		if strings.Count(hour, ":") > 1 {
-			return
+			fmt.Printf("Failed to fetch channel %s: %s\n", ch.id, err)
+			continue
 		}
 
-		year, month, day := time.Now().Date()
-		if e.DOM.Nodes[0].Parent.Parent.Attr[0].Key == "id" {
-			if e.DOM.Nodes[0].Parent.Parent.Attr[0].Val == "b" {
-				day += 1
+		chDoc, err := goquery.NewDocumentFromReader(strings.NewReader(chHTML))
+		if err != nil {
+			fmt.Printf("Failed to parse channel %s: %s\n", ch.id, err)
+			continue
+		}
+
+		chDoc.Find("div.schedule > div:not(.clear)").Each(func(_ int, s *goquery.Selection) {
+			node := s.Nodes[0]
+
+			hour := s.Find(".time").Text()
+			prog := s.Find(".prog").Text()
+			rawData := getDesc(node.LastChild)
+
+			if strings.Count(hour, ":") > 1 {
+				return
 			}
-			if e.DOM.Nodes[0].Parent.Parent.Attr[0].Val == "c" {
-				day += 2
+
+			year, month, day := time.Now().Date()
+			parent := node.Parent.Parent
+			if len(parent.Attr) > 0 && parent.Attr[0].Key == "id" {
+				if parent.Attr[0].Val == "b" {
+					day += 1
+				}
+				if parent.Attr[0].Val == "c" {
+					day += 2
+				}
+			} else {
+				return
 			}
-		} else {
-			return
-		}
-		day += timeOffset(e.DOM.Nodes[0])
+			day += timeOffset(node)
 
-		p := &Programme{
-			Channel: params["id"][0],
-			Start:   parseTime(year, month, day, hour),
-			Description: &Description{
-				Lang:  "sl",
-				Value: rawData,
-			},
-			Title: &Title{
-				Lang:  "sl",
-				Value: prog,
-			},
-		}
-		//processData(p, rawData)
-		if len(tv.Programme) > 0 {
-			tv.Programme[len(tv.Programme)-1].Stop = p.Start
-		}
-		tv.Programme = append(tv.Programme, p)
-		//lastHour = hour
-	})
-
-	err := c.Visit("https://www.tvsporedi.si/spored.php")
-	if err != nil {
-		fmt.Println(err)
+			p := &Programme{
+				Channel: ch.id,
+				Start:   parseTime(year, month, day, hour),
+				Description: &Description{
+					Lang:  "sl",
+					Value: rawData,
+				},
+				Title: &Title{
+					Lang:  "sl",
+					Value: prog,
+				},
+			}
+			if len(tv.Programme) > 0 {
+				tv.Programme[len(tv.Programme)-1].Stop = p.Start
+			}
+			tv.Programme = append(tv.Programme, p)
+		})
 	}
 
 	out, err := xml.MarshalIndent(tv, " ", "  ")
@@ -135,36 +152,15 @@ func runTvSporedi(outPath string) {
 		fmt.Println(err)
 	}
 
-	err = ioutil.WriteFile(outPath+"epg_tvsporedi.xml", out, 0644)
+	err = os.WriteFile(outPath+"epg_tvsporedi.xml", out, 0644)
 	if err != nil {
-		log.Fatalf("Error writing to ffile: %s", err)
+		log.Fatalf("Error writing to file: %s", err)
 	}
 }
 
 func getDesc(startNode *html.Node) string {
 	currentNode := startNode.FirstChild
 
-	//var result []string
-	//for {
-	//	if currentNode == nil {
-	//		break
-	//	}
-	//	if currentNode.Data == "br" {
-	//		// pass
-	//	} else if currentNode.Data == "p" {
-	//		result = append(result, "para:"+currentNode.FirstChild.Data)
-	//	} else {
-	//		if sp := strings.Split(currentNode.Data, "... "); len(sp) > 0 {
-	//			result = append(result, sp...)
-	//		} else if sp := strings.Split(currentNode.Data, "......"); len(sp) > 0 {
-	//			result = append(result, sp...)
-	//		} else {
-	//			result = append(result, currentNode.Data)
-	//		}
-	//	}
-	//	currentNode = currentNode.NextSibling
-	//}
-	//return result
 	var result string
 	for {
 		if currentNode == nil {
