@@ -69,7 +69,11 @@ func mockFlaresolverrServer(t *testing.T, channelsHTML, scheduleHTML string) *ht
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req fsRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("mockFlaresolverrServer: decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		switch req.Cmd {
 		case "sessions.create":
 			json.NewEncoder(w).Encode(fsResponse{Status: "ok", Session: "test-sess"})
