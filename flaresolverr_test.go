@@ -103,3 +103,14 @@ func TestFlaresolverrDestroySession(t *testing.T) {
 	require.NoError(t, flaresolverrDestroySession(srv.URL, "abc123"))
 	assert.True(t, called)
 }
+
+func TestFlaresolverrDestroySession_error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(fsResponse{Status: "error", Message: "no such session"})
+	}))
+	defer srv.Close()
+
+	err := flaresolverrDestroySession(srv.URL, "gone")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no such session")
+}

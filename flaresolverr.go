@@ -109,6 +109,12 @@ func flaresolverrCreateSession(endpoint string) (string, error) {
 }
 
 func flaresolverrDestroySession(endpoint, sessionID string) error {
-	_, err := flaresolverrPost(endpoint, fsRequest{Cmd: "sessions.destroy", Session: sessionID})
-	return err
+	resp, err := flaresolverrPost(endpoint, fsRequest{Cmd: "sessions.destroy", Session: sessionID})
+	if err != nil {
+		return err
+	}
+	if resp.Status != "ok" {
+		return fmt.Errorf("flaresolverr destroy session failed: %s", resp.Message)
+	}
+	return nil
 }
