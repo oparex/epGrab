@@ -16,7 +16,11 @@ func TestFlaresolverrGetHTML_success(t *testing.T) {
 		assert.Equal(t, "/v1", r.URL.Path)
 
 		var req fsRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("handler: decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		assert.Equal(t, "request.get", req.Cmd)
 		assert.Equal(t, "http://example.com", req.URL)
 		assert.Equal(t, "sess1", req.Session)
@@ -36,7 +40,11 @@ func TestFlaresolverrGetHTML_success(t *testing.T) {
 func TestFlaresolverrGetHTML_noSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req fsRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("handler: decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		assert.Equal(t, "", req.Session, "empty sessionID must not send session field")
 		json.NewEncoder(w).Encode(fsResponse{
 			Status:   "ok",
@@ -77,7 +85,11 @@ func TestFlaresolverrGetHTML_targetNon200(t *testing.T) {
 func TestFlaresolverrCreateSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req fsRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("handler: decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		assert.Equal(t, "sessions.create", req.Cmd)
 		json.NewEncoder(w).Encode(fsResponse{Status: "ok", Session: "abc123"})
 	}))
@@ -92,7 +104,11 @@ func TestFlaresolverrDestroySession(t *testing.T) {
 	called := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req fsRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("handler: decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
 		assert.Equal(t, "sessions.destroy", req.Cmd)
 		assert.Equal(t, "abc123", req.Session)
 		called = true
