@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -60,4 +63,65 @@ func TestIsValidTvSporediTime(t *testing.T) {
 	assert.False(t, isValidTvSporediTime("6:00"))
 	assert.False(t, isValidTvSporediTime(""))
 	assert.False(t, isValidTvSporediTime("06:0"))
+}
+
+func mockFlaresolverrServer(t *testing.T, channelsHTML, scheduleHTML string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req fsRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		switch req.Cmd {
+		case "sessions.create":
+			json.NewEncoder(w).Encode(fsResponse{Status: "ok", Session: "test-sess"})
+		case "sessions.destroy":
+			json.NewEncoder(w).Encode(fsResponse{Status: "ok"})
+		case "request.get":
+			body := scheduleHTML
+			if req.URL == "https://www.tvsporedi.si/" {
+				body = channelsHTML
+			}
+			json.NewEncoder(w).Encode(fsResponse{
+				Status:   "ok",
+				Solution: fsSolution{Status: 200, Response: body},
+			})
+		}
+	}))
+}
+
+func TestRunTvSporedi_writesXML(t *testing.T) {
+	channelsHTML, err := os.ReadFile("testdata/tvsporedi_channels.html")
+	require.NoError(t, err)
+	scheduleHTML, err := os.ReadFile("testdata/tvsporedi_schedule.html")
+	require.NoError(t, err)
+
+	srv := mockFlaresolverrServer(t, string(channelsHTML), string(scheduleHTML))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	runTvSporedi(dir+"/", srv.URL, false)
+
+	xmlData, err := os.ReadFile(dir + "/epg_tvsporedi.xml")
+	require.NoError(t, err)
+	xml := string(xmlData)
+	assert.Contains(t, xml, `<channel id="SLO1">`)
+	assert.Contains(t, xml, `<channel id="SLO2">`)
+	assert.Contains(t, xml, `<channel id="POP_TV">`)
+	assert.Contains(t, xml, "Jutarnji program")
+	assert.Contains(t, xml, "Oddaja za otroke")
+}
+
+func TestRunTvSporedi_dryRun_noFile(t *testing.T) {
+	channelsHTML, err := os.ReadFile("testdata/tvsporedi_channels.html")
+	require.NoError(t, err)
+	scheduleHTML, err := os.ReadFile("testdata/tvsporedi_schedule.html")
+	require.NoError(t, err)
+
+	srv := mockFlaresolverrServer(t, string(channelsHTML), string(scheduleHTML))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	runTvSporedi(dir+"/", srv.URL, true)
+
+	_, err = os.Stat(dir + "/epg_tvsporedi.xml")
+	assert.True(t, os.IsNotExist(err), "dry run must not write epg_tvsporedi.xml")
 }
