@@ -26,7 +26,10 @@ func loadTvSporediDoc(t *testing.T, path string) *goquery.Document {
 func TestParseTvSporediChannels(t *testing.T) {
 	doc := loadTvSporediDoc(t, "testdata/tvsporedi_channels.html")
 	channels := parseTvSporediChannels(doc)
-	assert.Equal(t, []string{"SLO1", "SLO2", "POP_TV"}, channels)
+	assert.Equal(t, []tvSporediChannel{
+		{id: "SLO 1 HD", scheduleURL: "https://www.tvsporedi.si/spored.php?urr=094408&id=SLO+1+HD"},
+		{id: "POP HD", scheduleURL: "https://www.tvsporedi.si/spored.php?urr=094409&id=POP+HD"},
+	}, channels)
 }
 
 func TestParseTvSporediChannels_dedup(t *testing.T) {
@@ -34,7 +37,7 @@ func TestParseTvSporediChannels_dedup(t *testing.T) {
 	channels := parseTvSporediChannels(doc)
 	seen := make(map[string]int)
 	for _, ch := range channels {
-		seen[ch]++
+		seen[ch.id]++
 	}
 	for id, count := range seen {
 		assert.Equal(t, 1, count, "channel %s appears more than once", id)
@@ -107,9 +110,8 @@ func TestRunTvSporedi_writesXML(t *testing.T) {
 	xmlData, err := os.ReadFile(dir + "/epg_tvsporedi.xml")
 	require.NoError(t, err)
 	xml := string(xmlData)
-	assert.Contains(t, xml, `<channel id="SLO1">`)
-	assert.Contains(t, xml, `<channel id="SLO2">`)
-	assert.Contains(t, xml, `<channel id="POP_TV">`)
+	assert.Contains(t, xml, `<channel id="SLO 1 HD">`)
+	assert.Contains(t, xml, `<channel id="POP HD">`)
 	assert.Contains(t, xml, "Jutarnji program")
 	assert.Contains(t, xml, "Oddaja za otroke")
 }

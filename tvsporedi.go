@@ -53,31 +53,30 @@ func runTvSporedi(outPath, endpoint string, dryRun bool) {
 
 	y, m, d := time.Now().Date()
 
-	for _, chanID := range channelIDs {
-		fmt.Println(chanID)
+	for _, ch := range channelIDs {
+		fmt.Println(ch.id)
 
 		tv.Channel = append(tv.Channel, &Channel{
-			Id: chanID,
+			Id: ch.id,
 			DisplayName: &DisplayName{
 				Lang:  "sl",
-				Value: chanID,
+				Value: ch.id,
 			},
 		})
 
-		schedURL := fmt.Sprintf("https://www.tvsporedi.si/?id=%s", url.QueryEscape(chanID))
-		schedHTML, err := flaresolverrGetHTML(schedURL, endpoint, sessionID)
+		schedHTML, err := flaresolverrGetHTML(ch.scheduleURL, endpoint, sessionID)
 		if err != nil {
-			fmt.Printf("tvsporedi: fetch schedule for %s: %s\n", chanID, err)
+			fmt.Printf("tvsporedi: fetch schedule for %s: %s\n", ch.id, err)
 			continue
 		}
 
 		schedDoc, err := goquery.NewDocumentFromReader(strings.NewReader(schedHTML))
 		if err != nil {
-			fmt.Printf("tvsporedi: parse schedule for %s: %s\n", chanID, err)
+			fmt.Printf("tvsporedi: parse schedule for %s: %s\n", ch.id, err)
 			continue
 		}
 
-		programmes := parseTvSporediSchedule(schedDoc, chanID, y, m, d)
+		programmes := parseTvSporediSchedule(schedDoc, ch.id, y, m, d)
 
 		var prev *Programme
 		for _, p := range programmes {
@@ -109,14 +108,23 @@ func runTvSporedi(outPath, endpoint string, dryRun bool) {
 	fmt.Printf("tvsporedi: wrote %s\n", outPath+"epg_tvsporedi.xml")
 }
 
-// parseTvSporediChannels extracts unique channel IDs from the tvsporedi main
-// page. Each channel link is an <a href="?id=CHANNEL&dan=a"> inside
-// #left-navigation; the id= query param is the channel identifier.
-func parseTvSporediChannels(doc *goquery.Document) []string {
-	var channels []string
+// tvSporediChannel pairs a channel's display ID with the full URL of its
+// schedule page (including the site's urr= token which cannot be computed
+// independently and must be taken from the main-page link).
+type tvSporediChannel struct {
+	id          string
+	scheduleURL string
+}
+
+// parseTvSporediChannels extracts unique channels from the tvsporedi main page.
+// Channel links have the form <a href="spored.php?urr=XXXX&id=CHANNEL+NAME">.
+// The id= query param (URL-decoded) is the channel identifier; the full href
+// is kept because the urr= token is required for the per-channel schedule URL.
+func parseTvSporediChannels(doc *goquery.Document) []tvSporediChannel {
+	var channels []tvSporediChannel
 	seen := make(map[string]bool)
 
-	doc.Find("#left-navigation a[href]").Each(func(_ int, s *goquery.Selection) {
+	doc.Find(`a[href*="spored.php"][href*="id="]`).Each(func(_ int, s *goquery.Selection) {
 		href, _ := s.Attr("href")
 		u, err := url.Parse(href)
 		if err != nil {
@@ -127,7 +135,10 @@ func parseTvSporediChannels(doc *goquery.Document) []string {
 			return
 		}
 		seen[chanID] = true
-		channels = append(channels, chanID)
+		channels = append(channels, tvSporediChannel{
+			id:          chanID,
+			scheduleURL: "https://www.tvsporedi.si/" + href,
+		})
 	})
 	return channels
 }
