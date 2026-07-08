@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -23,9 +24,16 @@ func loadTvSporediDoc(t *testing.T, path string) *goquery.Document {
 	return doc
 }
 
+func sporediBase(t *testing.T) *url.URL {
+	t.Helper()
+	u, err := url.Parse(tvSporediBase)
+	require.NoError(t, err)
+	return u
+}
+
 func TestParseTvSporediChannels(t *testing.T) {
 	doc := loadTvSporediDoc(t, "testdata/tvsporedi_channels.html")
-	channels := parseTvSporediChannels(doc)
+	channels := parseTvSporediChannels(doc, sporediBase(t))
 	assert.Equal(t, []tvSporediChannel{
 		{id: "SLO 1 HD", scheduleURL: "https://www.tvsporedi.si/spored.php?urr=094408&id=SLO+1+HD"},
 		{id: "POP HD", scheduleURL: "https://www.tvsporedi.si/spored.php?urr=094409&id=POP+HD"},
@@ -34,7 +42,7 @@ func TestParseTvSporediChannels(t *testing.T) {
 
 func TestParseTvSporediChannels_dedup(t *testing.T) {
 	doc := loadTvSporediDoc(t, "testdata/tvsporedi_channels.html")
-	channels := parseTvSporediChannels(doc)
+	channels := parseTvSporediChannels(doc, sporediBase(t))
 	seen := make(map[string]int)
 	for _, ch := range channels {
 		seen[ch.id]++
@@ -50,13 +58,75 @@ func TestParseTvSporediSchedule(t *testing.T) {
 
 	require.Len(t, programmes, 2, "bad-time row and tomorrow row must be excluded")
 
-	assert.Equal(t, "SLO1", programmes[0].Channel)
-	assert.Equal(t, "20260705060000 +0200", programmes[0].Start)
-	assert.Equal(t, "Jutarnji program", programmes[0].Title.Value)
-	assert.Equal(t, "sl", programmes[0].Title.Lang)
+	p0 := programmes[0]
+	assert.Equal(t, "SLO1", p0.Channel)
+	assert.Equal(t, "20260705060000 +0200", p0.Start)
+	assert.Equal(t, "Jutarnji program", p0.Title.Value)
+	assert.Equal(t, "sl", p0.Title.Lang)
+	require.NotNil(t, p0.Description)
+	assert.Equal(t, "Jutarnji program opis.", p0.Description.Value)
+	assert.Equal(t, "sl", p0.Description.Lang)
+	require.NotNil(t, p0.Country)
+	assert.Equal(t, "Slovenija", p0.Country.Value)
+	assert.Nil(t, p0.EpisodeNumber)
 
-	assert.Equal(t, "20260705083000 +0200", programmes[1].Start)
-	assert.Equal(t, "Oddaja za otroke", programmes[1].Title.Value)
+	p1 := programmes[1]
+	assert.Equal(t, "20260705083000 +0200", p1.Start)
+	assert.Equal(t, "Oddaja za otroke", p1.Title.Value)
+	require.NotNil(t, p1.Description)
+	assert.Equal(t, "Otroška oddaja opis.", p1.Description.Value)
+	require.NotNil(t, p1.EpisodeNumber)
+	assert.Equal(t, "E05", p1.EpisodeNumber.Value)
+	assert.Equal(t, "onscreen", p1.EpisodeNumber.System)
+	assert.Nil(t, p1.Country)
+}
+
+func TestParseTvSporediMeta(t *testing.T) {
+	cases := []struct {
+		name        string
+		html        string
+		wantDesc    string
+		wantOrig    string
+		wantEpisode string
+		wantCountry string
+	}{
+		{
+			name:        "no desc div",
+			html:        `<div><div class="time">06:00</div><div class="prog">Title</div></div>`,
+			wantDesc:    "",
+			wantOrig:    "",
+			wantEpisode: "",
+			wantCountry: "",
+		},
+		{
+			name:        "desc with all fields",
+			html:        `<div><div class="toggle-item1a desc" style="display:none;"><br>Original naslov: Orig<br>Epizoda: E03/06<br>Država: Nemčija<br> <p>Opis oddaje.</p><br></div></div>`,
+			wantDesc:    "Opis oddaje.",
+			wantOrig:    "Orig",
+			wantEpisode: "E03/06",
+			wantCountry: "Nemčija",
+		},
+		{
+			name:        "desc with description only",
+			html:        `<div><div class="toggle-item2a desc" style="display:none;"><br>Original naslov: Show<br> <p>Samo opis.</p><br></div></div>`,
+			wantDesc:    "Samo opis.",
+			wantOrig:    "Show",
+			wantEpisode: "",
+			wantCountry: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := goquery.NewDocumentFromReader(strings.NewReader(tc.html))
+			require.NoError(t, err)
+			s := doc.Find("div").First()
+			desc, orig, ep, country := parseTvSporediMeta(s)
+			assert.Equal(t, tc.wantDesc, desc)
+			assert.Equal(t, tc.wantOrig, orig)
+			assert.Equal(t, tc.wantEpisode, ep)
+			assert.Equal(t, tc.wantCountry, country)
+		})
+	}
 }
 
 func TestIsValidTvSporediTime(t *testing.T) {
@@ -84,7 +154,7 @@ func mockFlaresolverrServer(t *testing.T, channelsHTML, scheduleHTML string) *ht
 			json.NewEncoder(w).Encode(fsResponse{Status: "ok"})
 		case "request.get":
 			body := scheduleHTML
-			if req.URL == "https://www.tvsporedi.si/" {
+			if req.URL == tvSporediBase {
 				body = channelsHTML
 			}
 			json.NewEncoder(w).Encode(fsResponse{
@@ -114,6 +184,10 @@ func TestRunTvSporedi_writesXML(t *testing.T) {
 	assert.Contains(t, xml, `<channel id="POP HD">`)
 	assert.Contains(t, xml, "Jutarnji program")
 	assert.Contains(t, xml, "Oddaja za otroke")
+	assert.Contains(t, xml, "Jutarnji program opis.")
+	assert.Contains(t, xml, "Otroška oddaja opis.")
+	assert.Contains(t, xml, `system="onscreen"`)
+	assert.Contains(t, xml, "E05")
 }
 
 func TestRunTvSporedi_dryRun_noFile(t *testing.T) {
