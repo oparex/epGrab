@@ -99,6 +99,14 @@ func TestParseTvSporediMeta(t *testing.T) {
 			wantCountry: "",
 		},
 		{
+			name:        "simple bare-text desc (sports entries)",
+			html:        `<div><div class="prog"><a href="#">Odbojka: Bolgarija - Nemčija</a></div><div class="toggle-item31563a desc">Liga narodov (ž)</div></div>`,
+			wantDesc:    "Liga narodov (ž)",
+			wantOrig:    "",
+			wantEpisode: "",
+			wantCountry: "",
+		},
+		{
 			name:        "desc with all fields",
 			html:        `<div><div class="toggle-item1a desc" style="display:none;"><br>Original naslov: Orig<br>Epizoda: E03/06<br>Država: Nemčija<br> <p>Opis oddaje.</p><br></div></div>`,
 			wantDesc:    "Opis oddaje.",

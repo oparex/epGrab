@@ -198,6 +198,10 @@ func parseTvSporediMeta(s *goquery.Selection) (description, origTitle, episode, 
 	}
 
 	description = strings.TrimSpace(desc.Find("p").First().Text())
+	if description == "" {
+		// Simple one-line desc: bare text with no <p> or <br> structure.
+		description = strings.TrimSpace(desc.Text())
+	}
 
 	// Extract the portion of inner HTML before the <p> block and split on <br>.
 	// goquery serializes void <br> elements as <br/>, so normalise before splitting.
