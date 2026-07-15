@@ -37,13 +37,15 @@ func getTodayDatePlusCompact(plus int) string {
 }
 
 func runSiol(outPath string) {
+	// siol serves plain server-rendered HTML (nginx, no Cloudflare challenge),
+	// so we fetch with a normal HTTP client — no headless browser required.
 	tv := &Tv{
 		GeneratorInfoName: "peter",
 		GeneratorInfoUrl:  "peter",
 	}
 
 	// Fetch channels page
-	channelsHTML, err := fetchRenderedHTML("https://tv-spored.siol.net/kanali")
+	channelsHTML, err := httpGetHTML("https://tv-spored.siol.net/kanali")
 	if err != nil {
 		log.Fatalf("Failed to fetch siol channels page: %s", err)
 	}
@@ -107,7 +109,7 @@ func runSiol(outPath string) {
 			dateCompact := getTodayDatePlusCompact(dayOffset)
 			scheduleURL := fmt.Sprintf("https://tv-spored.siol.net/kanal/%s/datum/%s", ch.id, dateCompact)
 
-			scheduleHTML, err := fetchRenderedHTML(scheduleURL)
+			scheduleHTML, err := httpGetHTML(scheduleURL)
 			if err != nil {
 				fmt.Printf("Failed to fetch schedule for %s on %s: %s\n", ch.id, dateCompact, err)
 				continue
@@ -119,71 +121,16 @@ func runSiol(outPath string) {
 				continue
 			}
 
+			y, m, d := time.Now().Add(time.Hour * 24 * time.Duration(dayOffset)).Date()
+			programmes := parseSiolSchedule(schedDoc, ch.id, y, m, d)
+
 			var previousProgramme *Programme
+			for _, sp := range programmes {
+				p := sp.programme
 
-			// Each programme is an <a> linking to the show detail page
-			// href format: /kanal/{id}/oddaja/{slug}/{showId}/datum/{date}
-			schedDoc.Find("a[href*='/oddaja/']").Each(func(_ int, s *goquery.Selection) {
-				href, exists := s.Attr("href")
-				if !exists {
-					return
-				}
-
-				// Extract programme title and time from the link text
-				text := strings.TrimSpace(s.Text())
-				if text == "" {
-					return
-				}
-
-				// The link text contains time and title, e.g. "7.00 Dobro jutro Razvedrilni 60 min"
-				// Parse the time (first token in format H.MM or HH.MM)
-				parts := strings.Fields(text)
-				if len(parts) < 2 {
-					return
-				}
-
-				timeStr := parts[0]
-				if !strings.Contains(timeStr, ".") {
-					return
-				}
-
-				// Convert "7.00" format to "07:00" for parseTime
-				timeParts := strings.Split(timeStr, ".")
-				if len(timeParts) != 2 {
-					return
-				}
-				hour := fmt.Sprintf("%s:%s", timeParts[0], timeParts[1])
-				if len(timeParts[0]) == 1 {
-					hour = fmt.Sprintf("0%s:%s", timeParts[0], timeParts[1])
-				}
-
-				// Title is everything after the time, minus trailing category/duration
-				title := strings.Join(parts[1:], " ")
-				// Try to strip trailing " XX min" pattern
-				for i := len(parts) - 1; i >= 2; i-- {
-					if parts[i] == "min" && i > 0 {
-						title = strings.Join(parts[1:i-1], " ")
-						break
-					}
-				}
-				if title == "" {
-					return
-				}
-
-				y, m, d := time.Now().Add(time.Hour * 24 * time.Duration(dayOffset)).Date()
-
-				p := &Programme{
-					Channel: ch.id,
-					Start:   parseTime(y, m, d, hour),
-					Title: &Title{
-						Lang:  "sl",
-						Value: title,
-					},
-				}
-
-				// Fetch show detail page for description
-				showURL := "https://tv-spored.siol.net" + href
-				showHTML, err := fetchRenderedHTML(showURL)
+				// Fetch show detail page for description, category and icon.
+				showURL := "https://tv-spored.siol.net" + sp.href
+				showHTML, err := httpGetHTML(showURL)
 				if err == nil {
 					showDoc, err := goquery.NewDocumentFromReader(strings.NewReader(showHTML))
 					if err == nil {
@@ -196,7 +143,7 @@ func runSiol(outPath string) {
 				}
 				previousProgramme = p
 				tv.Programme = append(tv.Programme, p)
-			})
+			}
 		}
 	}
 
@@ -211,12 +158,102 @@ func runSiol(outPath string) {
 	}
 }
 
+// siolProgramme pairs a parsed Programme with the relative href of its detail
+// page, which is fetched separately to fill in the description/category/icon.
+type siolProgramme struct {
+	programme *Programme
+	href      string
+}
+
+// parseSiolSchedule extracts the programmes from a channel's daily schedule
+// page. Each programme is an <a href=".../oddaja/..."> whose children are
+// separate <div>s for the time, title and category — so we read those divs
+// directly rather than splitting the run-together concatenated link text.
+func parseSiolSchedule(doc *goquery.Document, chID string, y int, m time.Month, d int) []siolProgramme {
+	var out []siolProgramme
+	seen := make(map[string]bool)
+
+	doc.Find("a[href*='/oddaja/']").Each(func(_ int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if !exists || href == "" {
+			return
+		}
+		// The page renders responsive (desktop/mobile) duplicates of each
+		// row; collapse them by detail href.
+		if seen[href] {
+			return
+		}
+
+		// Time: the first child <div>, e.g. "0.40".
+		timeStr := strings.TrimSpace(s.Find("div").First().Text())
+		hour, ok := normalizeSiolTime(timeStr)
+		if !ok {
+			return
+		}
+
+		// Title: the div carries a clean title="..." attribute; fall back to
+		// the bold title div's text.
+		title := strings.TrimSpace(s.Find("div[title]").First().AttrOr("title", ""))
+		if title == "" {
+			title = strings.TrimSpace(s.Find("div.font-extrabold").First().Text())
+		}
+		if title == "" {
+			return
+		}
+
+		seen[href] = true
+
+		p := &Programme{
+			Channel: chID,
+			Start:   parseTime(y, m, d, hour),
+			Title: &Title{
+				Lang:  "sl",
+				Value: title,
+			},
+		}
+		out = append(out, siolProgramme{programme: p, href: href})
+	})
+
+	return out
+}
+
+// normalizeSiolTime converts siol's "H.MM"/"HH.MM" time format into the
+// "HH:MM" form expected by parseTime. It returns false for anything that
+// isn't a time (e.g. stray links that also match the /oddaja/ selector).
+func normalizeSiolTime(t string) (string, bool) {
+	parts := strings.Split(t, ".")
+	if len(parts) != 2 {
+		return "", false
+	}
+	h, mnt := parts[0], parts[1]
+	if len(h) == 0 || len(h) > 2 || len(mnt) != 2 {
+		return "", false
+	}
+	for _, r := range h + mnt {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	if len(h) == 1 {
+		h = "0" + h
+	}
+	return h + ":" + mnt, true
+}
+
 func parseSiolShowDetail(doc *goquery.Document, p *Programme) {
-	// Description: look for paragraph text in the main content area
-	desc := strings.TrimSpace(doc.Find("p").FilterFunction(func(_ int, s *goquery.Selection) bool {
-		text := strings.TrimSpace(s.Text())
-		return len(text) > 20
-	}).First().Text())
+	// Description: the page exposes the show synopsis in the document head as
+	// the og:description / description meta tags. This is far more reliable than
+	// scraping <p> elements, which also contain the cookie-consent banner and
+	// the schedule of other shows on the same page.
+	desc, _ := doc.Find(`meta[property="og:description"]`).Attr("content")
+	if strings.TrimSpace(desc) == "" {
+		desc, _ = doc.Find(`meta[name="description"]`).Attr("content")
+	}
+	if strings.TrimSpace(desc) == "" {
+		// Fallback: the visible synopsis paragraph in the main detail block.
+		desc = doc.Find("p.font-bold.font-serif").First().Text()
+	}
+	desc = strings.TrimSpace(desc)
 	if desc != "" {
 		p.Description = &Description{
 			Lang:  "sl",
@@ -224,15 +261,19 @@ func parseSiolShowDetail(doc *goquery.Document, p *Programme) {
 		}
 	}
 
-	// Category: look for genre labels
-	doc.Find("a[href*='/zvrst/']").Each(func(i int, s *goquery.Selection) {
-		if i == 0 {
-			p.Category = &Category{
-				Lang:  "sl",
-				Value: strings.TrimSpace(s.Text()),
-			}
+	// Category: the genre sits in the <p> immediately after the show's <h1>
+	// title, e.g. "Ostalo / Posebni dogodek".
+	if cat := strings.TrimSpace(doc.Find("h1").First().NextFiltered("p").Text()); cat != "" {
+		p.Category = &Category{
+			Lang:  "sl",
+			Value: cat,
 		}
-	})
+	}
+
+	// Icon: the show poster, e.g. <img alt="Slika oddaje" src="...">.
+	if src, ok := doc.Find(`img[alt="Slika oddaje"]`).First().Attr("src"); ok && strings.TrimSpace(src) != "" {
+		p.Icon = &Icon{Src: strings.TrimSpace(src)}
+	}
 }
 
 func parseShowTime(t, date string) (string, string) {
