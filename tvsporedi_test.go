@@ -56,7 +56,7 @@ func TestParseTvSporediSchedule(t *testing.T) {
 	doc := loadTvSporediDoc(t, "testdata/tvsporedi_schedule.html")
 	programmes := parseTvSporediSchedule(doc, "SLO1", 2026, time.July, 5)
 
-	require.Len(t, programmes, 2, "bad-time row and tomorrow row must be excluded")
+	require.Len(t, programmes, 4, "2 from #a + 1 from #b + 1 from #c; bad-time row excluded")
 
 	p0 := programmes[0]
 	assert.Equal(t, "SLO1", p0.Channel)
@@ -79,6 +79,14 @@ func TestParseTvSporediSchedule(t *testing.T) {
 	assert.Equal(t, "E05", p1.EpisodeNumber.Value)
 	assert.Equal(t, "onscreen", p1.EpisodeNumber.System)
 	assert.Nil(t, p1.Country)
+
+	p2 := programmes[2]
+	assert.Equal(t, "20260706090000 +0200", p2.Start)
+	assert.Equal(t, "Jutri oddaja", p2.Title.Value)
+
+	p3 := programmes[3]
+	assert.Equal(t, "20260707100000 +0200", p3.Start)
+	assert.Equal(t, "Pojutrišnjem oddaja", p3.Title.Value)
 }
 
 func TestParseTvSporediMeta(t *testing.T) {
@@ -192,6 +200,8 @@ func TestRunTvSporedi_writesXML(t *testing.T) {
 	assert.Contains(t, xml, `<channel id="POP HD">`)
 	assert.Contains(t, xml, "Jutarnji program")
 	assert.Contains(t, xml, "Oddaja za otroke")
+	assert.Contains(t, xml, "Jutri oddaja")
+	assert.Contains(t, xml, "Pojutrišnjem oddaja")
 	assert.Contains(t, xml, "Jutarnji program opis.")
 	assert.Contains(t, xml, "Otroška oddaja opis.")
 	assert.Contains(t, xml, `system="onscreen"`)

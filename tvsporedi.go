@@ -147,44 +147,50 @@ func parseTvSporediChannels(doc *goquery.Document, baseURL *url.URL) []tvSporedi
 	return channels
 }
 
-// parseTvSporediSchedule extracts today's programmes from a channel schedule
-// page. The page wraps today's block in <div id="a">; tomorrow is "b", the
-// day after "c". Since we only fetch today we only parse #a.
+// parseTvSporediSchedule extracts programmes for today, tomorrow, and the day
+// after from a channel schedule page. The site puts each day in a separate
+// div: #a = today, #b = tomorrow, #c = day after tomorrow.
 func parseTvSporediSchedule(doc *goquery.Document, chanID string, y int, m time.Month, d int) []*Programme {
 	var out []*Programme
 
-	doc.Find("#a .schedule > div").Each(func(_ int, s *goquery.Selection) {
-		if s.HasClass("clear") {
-			return
-		}
-		timeStr := strings.TrimSpace(s.Find(".time").First().Text())
-		title := strings.TrimSpace(s.Find(".prog").First().Text())
-		if !isValidTvSporediTime(timeStr) || title == "" {
-			return
-		}
+	base := time.Date(y, m, d, 0, 0, 0, 0, time.Local)
+	for i, sel := range []string{"#a", "#b", "#c"} {
+		day := base.AddDate(0, 0, i)
+		dy, dm, dd := day.Date()
 
-		prog := &Programme{
-			Channel: chanID,
-			Start:   parseTime(y, m, d, timeStr),
-			Title: &Title{
-				Lang:  "sl",
-				Value: title,
-			},
-		}
+		doc.Find(sel+" .schedule > div").Each(func(_ int, s *goquery.Selection) {
+			if s.HasClass("clear") {
+				return
+			}
+			timeStr := strings.TrimSpace(s.Find(".time").First().Text())
+			title := strings.TrimSpace(s.Find(".prog").First().Text())
+			if !isValidTvSporediTime(timeStr) || title == "" {
+				return
+			}
 
-		description, _, episode, country := parseTvSporediMeta(s)
-		if description != "" {
-			prog.Description = &Description{Lang: "sl", Value: description}
-		}
-		if episode != "" {
-			prog.EpisodeNumber = &EpisodeNumber{System: "onscreen", Value: episode}
-		}
-		if country != "" {
-			prog.Country = &Country{Value: country}
-		}
+			prog := &Programme{
+				Channel: chanID,
+				Start:   parseTime(dy, dm, dd, timeStr),
+				Title: &Title{
+					Lang:  "sl",
+					Value: title,
+				},
+			}
 
-		out = append(out, prog)
-	})
+			description, _, episode, country := parseTvSporediMeta(s)
+			if description != "" {
+				prog.Description = &Description{Lang: "sl", Value: description}
+			}
+			if episode != "" {
+				prog.EpisodeNumber = &EpisodeNumber{System: "onscreen", Value: episode}
+			}
+			if country != "" {
+				prog.Country = &Country{Value: country}
+			}
+
+			out = append(out, prog)
+		})
+	}
 	return out
 }
 
