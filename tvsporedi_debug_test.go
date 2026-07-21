@@ -24,7 +24,7 @@ func TestDumpTvSporedi(t *testing.T) {
 
 	sessID, err := flaresolverrCreateSession(*fsEndpoint)
 	if err != nil {
-		t.Fatalf("create session: %v", err)
+		t.Skipf("FlareSolverr not reachable at %s — run with -flaresolverr=<url>: %v", *fsEndpoint, err)
 	}
 	defer flaresolverrDestroySession(*fsEndpoint, sessID)
 
