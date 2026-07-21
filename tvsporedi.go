@@ -3,240 +3,238 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
-	"log"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
-	"github.com/gocolly/colly"
-	"golang.org/x/net/html"
+	"github.com/PuerkitoBio/goquery"
 )
 
-func parseTime(year int, month time.Month, day int, hour string) string {
-	return fmt.Sprintf("%d%02d%02d%s00 +0200", year, month, day, strings.ReplaceAll(hour, ":", ""))
-}
+const tvSporediBase = "https://www.tvsporedi.si/spored.php"
 
-func findFullPrevSibling(currentNode *html.Node) *html.Node {
-	if currentNode.PrevSibling == nil || currentNode.PrevSibling.Data == "\n\t\t\t\t\t\t" || currentNode.PrevSibling.Data == "a" {
-		return nil
+// runTvSporedi is the entry point for the tvsporedi scraper. It creates a
+// FlareSolverr session (solving the Cloudflare managed challenge once), fetches
+// today's schedule for every channel, and writes epg_tvsporedi.xml. On any
+// fatal error it prints and returns rather than calling log.Fatalf so that
+// -scraper all can continue with the remaining scrapers.
+func runTvSporedi(outPath, endpoint string, dryRun bool) {
+	sessionID, err := flaresolverrCreateSession(endpoint)
+	if err != nil {
+		fmt.Printf("tvsporedi: create FlareSolverr session at %s: %s\n", endpoint, err)
+		return
 	}
-	if len(currentNode.PrevSibling.Attr) > 0 && currentNode.PrevSibling.Attr[0].Key == "class" && currentNode.PrevSibling.Attr[0].Val == "clear" {
-		return findFullPrevSibling(currentNode.PrevSibling)
-	}
-	return currentNode.PrevSibling
-}
+	defer func() {
+		if err := flaresolverrDestroySession(endpoint, sessionID); err != nil {
+			fmt.Printf("tvsporedi: destroy session warning: %s\n", err)
+		}
+	}()
 
-func timeOffset(currentNode *html.Node) int {
-	lastNode := findFullPrevSibling(currentNode)
-	if lastNode == nil {
-		return 0
-	}
-	if lastNode.FirstChild.FirstChild.Data > currentNode.FirstChild.FirstChild.Data {
-		return 1
-	}
-	return timeOffset(lastNode)
-}
+	baseURL, _ := url.Parse(tvSporediBase)
 
-func runTvSporedi(outPath string) {
-	// Instantiate default collector
-	c := colly.NewCollector(
-		colly.AllowedDomains("tvsporedi.si", "www.tvsporedi.si"),
-	)
-	detailCollector := c.Clone()
+	chanListHTML, err := flaresolverrGetHTML(tvSporediBase, endpoint, sessionID)
+	if err != nil {
+		fmt.Printf("tvsporedi: fetch channel list: %s\n", err)
+		return
+	}
+
+	chanListDoc, err := goquery.NewDocumentFromReader(strings.NewReader(chanListHTML))
+	if err != nil {
+		fmt.Printf("tvsporedi: parse channel list: %s\n", err)
+		return
+	}
+
+	channels := parseTvSporediChannels(chanListDoc, baseURL)
+	if len(channels) == 0 {
+		fmt.Println("tvsporedi: no channels found — selectors may need updating for current site HTML")
+		return
+	}
 
 	tv := &Tv{
 		GeneratorInfoName: "peter",
 		GeneratorInfoUrl:  "peter",
 	}
 
-	c.OnHTML("div[id=left-navigation] a[href]", func(e *colly.HTMLElement) {
-		params, err := url.ParseQuery(e.Attr("href"))
-		if err != nil {
-			log.Fatalf("Problem decoding url %s: %s", e.Attr("href"), err)
-		}
-		if len(params["id"]) == 0 {
-			log.Fatalf("Empty id param in url %s", e.Attr("href"))
-		}
-		fmt.Println(params["id"][0])
-		//if params["id"][0] != "HBO" {
-		//	return
-		//}
+	y, m, d := time.Now().Date()
+
+	for _, ch := range channels {
+		fmt.Println(ch.id)
+
 		tv.Channel = append(tv.Channel, &Channel{
-			Id: params["id"][0],
+			Id: ch.id,
 			DisplayName: &DisplayName{
 				Lang:  "sl",
-				Value: params["id"][0],
+				Value: ch.id,
 			},
 		})
-		channelURL := e.Request.AbsoluteURL(strings.ReplaceAll(e.Attr("href"), " ", "+"))
-		err = detailCollector.Visit(channelURL)
+
+		schedHTML, err := flaresolverrGetHTML(ch.scheduleURL, endpoint, sessionID)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Printf("tvsporedi: fetch schedule for %s: %s\n", ch.id, err)
+			continue
 		}
-	})
 
-	detailCollector.OnHTML("div[class=schedule] > div[class!=clear]", func(e *colly.HTMLElement) {
-		params, err := url.ParseQuery(e.Request.URL.RawQuery)
+		schedDoc, err := goquery.NewDocumentFromReader(strings.NewReader(schedHTML))
 		if err != nil {
-			log.Fatalf("Problem decoding url %s: %s", e.Attr("href"), err)
-		}
-		if len(params["id"]) == 0 {
-			log.Fatalf("Empty id param in url %s", e.Attr("href"))
-		}
-		hour := e.ChildText(".time")
-		prog := e.ChildText(".prog")
-		rawData := getDesc(e.DOM.Nodes[0].LastChild)
-
-		if strings.Count(hour, ":") > 1 {
-			return
+			fmt.Printf("tvsporedi: parse schedule for %s: %s\n", ch.id, err)
+			continue
 		}
 
-		year, month, day := time.Now().Date()
-		if e.DOM.Nodes[0].Parent.Parent.Attr[0].Key == "id" {
-			if e.DOM.Nodes[0].Parent.Parent.Attr[0].Val == "b" {
-				day += 1
+		programmes := parseTvSporediSchedule(schedDoc, ch.id, y, m, d)
+
+		var prev *Programme
+		for _, p := range programmes {
+			if prev != nil {
+				prev.Stop = p.Start
 			}
-			if e.DOM.Nodes[0].Parent.Parent.Attr[0].Val == "c" {
-				day += 2
-			}
-		} else {
-			return
+			prev = p
+			tv.Programme = append(tv.Programme, p)
 		}
-		day += timeOffset(e.DOM.Nodes[0])
+	}
 
-		p := &Programme{
-			Channel: params["id"][0],
-			Start:   parseTime(year, month, day, hour),
-			Description: &Description{
-				Lang:  "sl",
-				Value: rawData,
-			},
-			Title: &Title{
-				Lang:  "sl",
-				Value: prog,
-			},
-		}
-		//processData(p, rawData)
-		if len(tv.Programme) > 0 {
-			tv.Programme[len(tv.Programme)-1].Stop = p.Start
-		}
-		tv.Programme = append(tv.Programme, p)
-		//lastHour = hour
-	})
-
-	err := c.Visit("https://www.tvsporedi.si/spored.php")
-	if err != nil {
-		fmt.Println(err)
+	if dryRun {
+		fmt.Printf("tvsporedi: dry run — %d channels, %d programmes (no XML written)\n",
+			len(tv.Channel), len(tv.Programme))
+		return
 	}
 
 	out, err := xml.MarshalIndent(tv, " ", "  ")
 	if err != nil {
-		fmt.Println(err)
+		fmt.Printf("tvsporedi: marshal XML: %s\n", err)
+		return
 	}
 
-	err = ioutil.WriteFile(outPath+"epg_tvsporedi.xml", out, 0644)
-	if err != nil {
-		log.Fatalf("Error writing to ffile: %s", err)
+	if err := os.WriteFile(outPath+"epg_tvsporedi.xml", out, 0644); err != nil {
+		fmt.Printf("tvsporedi: write XML: %s\n", err)
+		return
 	}
+
+	fmt.Printf("tvsporedi: wrote %s\n", outPath+"epg_tvsporedi.xml")
 }
 
-func getDesc(startNode *html.Node) string {
-	currentNode := startNode.FirstChild
-
-	//var result []string
-	//for {
-	//	if currentNode == nil {
-	//		break
-	//	}
-	//	if currentNode.Data == "br" {
-	//		// pass
-	//	} else if currentNode.Data == "p" {
-	//		result = append(result, "para:"+currentNode.FirstChild.Data)
-	//	} else {
-	//		if sp := strings.Split(currentNode.Data, "... "); len(sp) > 0 {
-	//			result = append(result, sp...)
-	//		} else if sp := strings.Split(currentNode.Data, "......"); len(sp) > 0 {
-	//			result = append(result, sp...)
-	//		} else {
-	//			result = append(result, currentNode.Data)
-	//		}
-	//	}
-	//	currentNode = currentNode.NextSibling
-	//}
-	//return result
-	var result string
-	for {
-		if currentNode == nil {
-			break
-		}
-		if currentNode.Data == "br" {
-			if len(result) > 0 && result[len(result)-1] != '.' {
-				result += ". "
-			}
-		} else if currentNode.Data == "p" && currentNode.FirstChild != nil {
-			result += currentNode.FirstChild.Data
-		} else {
-			result += currentNode.Data
-		}
-		currentNode = currentNode.NextSibling
-	}
-	return result
+// tvSporediChannel pairs a channel's display ID with the full URL of its
+// schedule page (including the site's urr= token which cannot be computed
+// independently and must be taken from the channel-list link).
+type tvSporediChannel struct {
+	id          string
+	scheduleURL string
 }
 
-func processData(p *Programme, result []string) {
-	for _, s := range result {
-		s = strings.ReplaceAll(s, "&#39;", "'")
-		if isEpisodeInfo(s) {
-			p.EpisodeNumber = &EpisodeNumber{
-				Value: s,
-			}
-		} else if isCountryInfo(s) {
-			p.Country = &Country{
+// parseTvSporediChannels extracts unique channels from spored.php's
+// #left-navigation. Links there are relative: href="?urr=XXXX&id=CHANNEL+NAME".
+// baseURL (https://www.tvsporedi.si/spored.php) is used to resolve them into
+// absolute schedule URLs.
+func parseTvSporediChannels(doc *goquery.Document, baseURL *url.URL) []tvSporediChannel {
+	var channels []tvSporediChannel
+	seen := make(map[string]bool)
+
+	doc.Find(`#left-navigation a[href*="id="]`).Each(func(_ int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		rel, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+		chanID := rel.Query().Get("id")
+		if chanID == "" || seen[chanID] {
+			return
+		}
+		seen[chanID] = true
+		channels = append(channels, tvSporediChannel{
+			id:          chanID,
+			scheduleURL: baseURL.ResolveReference(rel).String(),
+		})
+	})
+	return channels
+}
+
+// parseTvSporediSchedule extracts today's programmes from a channel schedule
+// page. The page wraps today's block in <div id="a">; tomorrow is "b", the
+// day after "c". Since we only fetch today we only parse #a.
+func parseTvSporediSchedule(doc *goquery.Document, chanID string, y int, m time.Month, d int) []*Programme {
+	var out []*Programme
+
+	doc.Find("#a .schedule > div").Each(func(_ int, s *goquery.Selection) {
+		if s.HasClass("clear") {
+			return
+		}
+		timeStr := strings.TrimSpace(s.Find(".time").First().Text())
+		title := strings.TrimSpace(s.Find(".prog").First().Text())
+		if !isValidTvSporediTime(timeStr) || title == "" {
+			return
+		}
+
+		prog := &Programme{
+			Channel: chanID,
+			Start:   parseTime(y, m, d, timeStr),
+			Title: &Title{
 				Lang:  "sl",
-				Value: s,
-			}
-		} else if isCastInfo(s) {
-			credits := &Credits{}
-			for _, actor := range strings.Split(s[3:], ", ") {
-				credits.Actor = append(credits.Actor, &Actor{Value: actor})
-			}
-			p.Credits = credits
-		} else if isIMDbInfo(s) {
-			p.Rating = &Rating{
-				System: "IMDb",
-				Value:  strings.Split(s, "IMDb ocena: ")[1],
-			}
-		} else if isDescriptionInfo(s) {
-			p.Description = &Description{
-				Lang:  "sl",
-				Value: html.UnescapeString(s),
-			}
+				Value: title,
+			},
+		}
+
+		description, _, episode, country := parseTvSporediMeta(s)
+		if description != "" {
+			prog.Description = &Description{Lang: "sl", Value: description}
+		}
+		if episode != "" {
+			prog.EpisodeNumber = &EpisodeNumber{System: "onscreen", Value: episode}
+		}
+		if country != "" {
+			prog.Country = &Country{Value: country}
+		}
+
+		out = append(out, prog)
+	})
+	return out
+}
+
+// parseTvSporediMeta extracts the hidden metadata from a show's .desc element.
+// The div contains <br>-separated key: value lines before a <p> description.
+// origTitle may be empty when the site omits it (identical to display title).
+func parseTvSporediMeta(s *goquery.Selection) (description, origTitle, episode, country string) {
+	desc := s.Find(".desc").First()
+	if desc.Length() == 0 {
+		return
+	}
+
+	description = strings.TrimSpace(desc.Find("p").First().Text())
+	if description == "" {
+		// Simple one-line desc: bare text with no <p> or <br> structure.
+		description = strings.TrimSpace(desc.Text())
+	}
+
+	// Extract the portion of inner HTML before the <p> block and split on <br>.
+	// goquery serializes void <br> elements as <br/>, so normalise before splitting.
+	rawHTML, _ := desc.Html()
+	rawHTML = strings.ReplaceAll(rawHTML, "<br/>", "<br>")
+	metaPart := rawHTML
+	if idx := strings.Index(rawHTML, "<p>"); idx >= 0 {
+		metaPart = rawHTML[:idx]
+	}
+	for _, line := range strings.Split(metaPart, "<br>") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Original naslov:"):
+			origTitle = strings.TrimSpace(strings.TrimPrefix(line, "Original naslov:"))
+		case strings.HasPrefix(line, "Epizoda:"):
+			episode = strings.TrimSpace(strings.TrimPrefix(line, "Epizoda:"))
+		case strings.HasPrefix(line, "Država:"):
+			country = strings.TrimSpace(strings.TrimPrefix(line, "Država:"))
 		}
 	}
+	return
 }
 
-func isEpisodeInfo(text string) bool {
-	return strings.Contains(text, "epizoda")
-}
-
-func isCountryInfo(text string) bool {
-	for _, country := range []string{"ZDA", "NEW ZEALAND", "Nemčija", "Hrvaška"} {
-		if strings.Contains(text, country) {
-			return true
+// isValidTvSporediTime reports whether s is a well-formed HH:MM clock string.
+func isValidTvSporediTime(s string) bool {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 || len(parts[0]) != 2 || len(parts[1]) != 2 {
+		return false
+	}
+	for _, r := range parts[0] + parts[1] {
+		if r < '0' || r > '9' {
+			return false
 		}
 	}
-	return false
-}
-
-func isCastInfo(text string) bool {
-	return strings.Contains(text, "I: ") || strings.Contains(text, "R: ")
-}
-
-func isDescriptionInfo(text string) bool {
-	return len(text) > 20
-}
-
-func isIMDbInfo(text string) bool {
-	return strings.Contains(text, "IMDb ocena: ")
+	return true
 }

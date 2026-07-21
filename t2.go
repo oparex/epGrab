@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -367,7 +368,7 @@ func runT2(outPath string) {
 
 	//out = []byte(strings.ReplaceAll(string(out), "&", "and"))
 
-	err = ioutil.WriteFile(outPath+"epg_t2.xml", out, 0644)
+	err = os.WriteFile(outPath+"epg_t2.xml", out, 0644)
 	if err != nil {
 		log.Fatalf("Error writing to ffile: %s", err)
 	}
@@ -391,7 +392,7 @@ func makeT2Request(endpoint, data, method string, client *http.Client) ([]byte, 
 	}
 
 	defer resp.Body.Close()
-	responseBody, err := ioutil.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
