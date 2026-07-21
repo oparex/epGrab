@@ -234,7 +234,7 @@ func runT2(outPath string) {
 	}
 
 	channelsMap := make(map[int]string)
-	channelIds := ""
+	var chanIDs []string
 
 	for _, channel := range channels {
 		name := strings.ReplaceAll(channel.Name, "&", "and")
@@ -248,7 +248,7 @@ func runT2(outPath string) {
 			}
 		}
 		channelsMap[channel.Id] = name
-		channelIds += strconv.Itoa(channel.Id) + ","
+		chanIDs = append(chanIDs, strconv.Itoa(channel.Id))
 		tv.Channel = append(tv.Channel, &Channel{
 			Id: name,
 			DisplayName: &DisplayName{
@@ -258,7 +258,7 @@ func runT2(outPath string) {
 		})
 	}
 
-	channelIds = channelIds[:len(channelIds)-2]
+	channelIds := strings.Join(chanIDs, ",")
 
 	todayStart := time.Now().Truncate(time.Hour * 24)
 	startTime := todayStart.UnixMilli()
