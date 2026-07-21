@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,6 +158,7 @@ func parseTvSporediSchedule(doc *goquery.Document, chanID string, y int, m time.
 	for i, sel := range []string{"#a", "#b", "#c"} {
 		day := base.AddDate(0, 0, i)
 		dy, dm, dd := day.Date()
+		prevMins := -1
 
 		doc.Find(sel+" .schedule > div").Each(func(_ int, s *goquery.Selection) {
 			if s.HasClass("clear") {
@@ -167,6 +169,16 @@ func parseTvSporediSchedule(doc *goquery.Document, chanID string, y int, m time.
 			if !isValidTvSporediTime(timeStr) || title == "" {
 				return
 			}
+
+			h, _ := strconv.Atoi(timeStr[:2])
+			min, _ := strconv.Atoi(timeStr[3:])
+			curMins := h*60 + min
+			if prevMins >= 0 && curMins < prevMins {
+				// Time went backwards — show crosses midnight into the next day.
+				next := time.Date(dy, dm, dd, 0, 0, 0, 0, time.Local).AddDate(0, 0, 1)
+				dy, dm, dd = next.Date()
+			}
+			prevMins = curMins
 
 			prog := &Programme{
 				Channel: chanID,

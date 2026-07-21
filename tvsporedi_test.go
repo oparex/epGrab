@@ -56,7 +56,7 @@ func TestParseTvSporediSchedule(t *testing.T) {
 	doc := loadTvSporediDoc(t, "testdata/tvsporedi_schedule.html")
 	programmes := parseTvSporediSchedule(doc, "SLO1", 2026, time.July, 5)
 
-	require.Len(t, programmes, 4, "2 from #a + 1 from #b + 1 from #c; bad-time row excluded")
+	require.Len(t, programmes, 6, "4 from #a (incl. 2 after midnight) + 1 from #b + 1 from #c; bad-time excluded")
 
 	p0 := programmes[0]
 	assert.Equal(t, "SLO1", p0.Channel)
@@ -80,13 +80,25 @@ func TestParseTvSporediSchedule(t *testing.T) {
 	assert.Equal(t, "onscreen", p1.EpisodeNumber.System)
 	assert.Nil(t, p1.Country)
 
+	// Late show still on July 5
 	p2 := programmes[2]
-	assert.Equal(t, "20260706090000 +0200", p2.Start)
-	assert.Equal(t, "Jutri oddaja", p2.Title.Value)
+	assert.Equal(t, "20260705233000 +0200", p2.Start)
+	assert.Equal(t, "Pozna oddaja", p2.Title.Value)
 
+	// After-midnight show crosses into July 6
 	p3 := programmes[3]
-	assert.Equal(t, "20260707100000 +0200", p3.Start)
-	assert.Equal(t, "Pojutrišnjem oddaja", p3.Title.Value)
+	assert.Equal(t, "20260706001500 +0200", p3.Start)
+	assert.Equal(t, "Po polnoči", p3.Title.Value)
+
+	// #b show — tomorrow (July 6) 09:00
+	p4 := programmes[4]
+	assert.Equal(t, "20260706090000 +0200", p4.Start)
+	assert.Equal(t, "Jutri oddaja", p4.Title.Value)
+
+	// #c show — day after (July 7) 10:00
+	p5 := programmes[5]
+	assert.Equal(t, "20260707100000 +0200", p5.Start)
+	assert.Equal(t, "Pojutrišnjem oddaja", p5.Title.Value)
 }
 
 func TestParseTvSporediMeta(t *testing.T) {
