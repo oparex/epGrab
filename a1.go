@@ -55,9 +55,23 @@ func runA1(outPath string) {
 			month, _ := strconv.Atoi(dateComponents[1])
 			day, _ := strconv.Atoi(dateComponents[2])
 
+			curYear, curMonth, curDay := year, month, day
+			prevMins := -1
 			var previousProgramme *Programme
 
 			for _, program := range schedule.Programs {
+				timeParts := strings.SplitN(program.StartTime, ":", 2)
+				if len(timeParts) == 2 {
+					h, _ := strconv.Atoi(timeParts[0])
+					m, _ := strconv.Atoi(timeParts[1])
+					curMins := h*60 + m
+					if prevMins >= 0 && curMins < prevMins {
+						next := time.Date(curYear, time.Month(curMonth), curDay, 0, 0, 0, 0, time.Local).AddDate(0, 0, 1)
+						curYear, curMonth, curDay = next.Year(), int(next.Month()), next.Day()
+					}
+					prevMins = curMins
+				}
+
 				targetUrl := fmt.Sprintf("https://spored.a1.si/api/epg/program/%d", program.Id)
 				responseShow, err := http.Get(targetUrl)
 				if err != nil {
@@ -87,7 +101,7 @@ func runA1(outPath string) {
 
 				programme := &Programme{
 					Channel: channel.Name,
-					Start:   parseTime(year, time.Month(month), day, program.StartTime),
+					Start:   parseTime(curYear, time.Month(curMonth), curDay, program.StartTime),
 					Stop:    "",
 					Title: &Title{
 						Lang:  "sl",
