@@ -1,0 +1,12 @@
+# Output files
+*.xml
+!testdata/*.xml
+epGrab
+epGrab_*
+
+# IDE
+.idea/
+
+# Test output
+test_output/
+testdata/*_live_*.html
