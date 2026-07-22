@@ -102,11 +102,11 @@ func (s *Show) constructDescString() string {
 		out += " | "
 	}
 	if len(s.ProductionFrom) > 0 {
-		prodTime, err := strconv.Atoi(s.ProductionFrom)
+		prodTime, err := strconv.ParseInt(s.ProductionFrom, 10, 64)
 		if err != nil {
 			log.Printf("Could not convert production time %s for show %d: %s", s.ProductionFrom, s.Id, err)
 		} else {
-			out += strconv.Itoa(time.UnixMilli(int64(prodTime)).Year()) + "\n | "
+			out += strconv.Itoa(time.UnixMilli(prodTime).Year()) + "\n | "
 		}
 	}
 	if len(s.Ratings) > 0 {
@@ -273,26 +273,26 @@ func runT2(outPath string) {
 	var currentChannelId int
 
 	for _, e := range epg {
-		startInt, err := strconv.Atoi(e.StartTimestamp)
+		startInt, err := strconv.ParseInt(e.StartTimestamp, 10, 64)
 		if err != nil {
 			fmt.Printf("Error converting start time for show %s value %s: %s", e.NameSingleLine, e.StartTimestamp, err)
 			continue
 		}
-		endInt, err := strconv.Atoi(e.EndTimestamp)
+		endInt, err := strconv.ParseInt(e.EndTimestamp, 10, 64)
 		if err != nil {
 			fmt.Printf("Error converting end time for show %s value %s: %s", e.NameSingleLine, e.EndTimestamp, err)
 			continue
 		}
-		productionInt := 0
+		var productionInt int64
 		if len(e.Show.ProductionFrom) > 0 {
-			productionInt, err = strconv.Atoi(e.Show.ProductionFrom)
+			productionInt, err = strconv.ParseInt(e.Show.ProductionFrom, 10, 64)
 			if err != nil {
 				fmt.Printf("Error converting production from for show %s value %s: %s", e.NameSingleLine, e.Show.ProductionFrom, err)
 				continue
 			}
 		}
-		start := time.UnixMilli(int64(startInt))
-		end := time.UnixMilli(int64(endInt))
+		start := time.UnixMilli(startInt)
+		end := time.UnixMilli(endInt)
 
 		//pn := channelsMap[e.ChannelId]
 		//if strings.Contains(pn, "Sci Fi") {
@@ -325,7 +325,7 @@ func runT2(outPath string) {
 			},
 		}
 		if productionInt > 0 {
-			p.Date = strconv.Itoa(time.UnixMilli(int64(productionInt)).Year())
+			p.Date = strconv.Itoa(time.UnixMilli(productionInt).Year())
 		}
 		if len(e.Show.Ratings) > 0 {
 			p.Rating = &Rating{
